@@ -68,6 +68,12 @@ impl Error {
     pub fn is<T: std::error::Error + 'static>(&self) -> bool {
         self.downcast_ref::<T>().is_some()
     }
+
+    // source() как обычный метод — эквивалент std::error::Error::source,
+    // но без impl std::error::Error (он вызывал конфликт с blanket From).
+    pub fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.chain.get(1).map(|e| e.as_ref() as &dyn std::error::Error)
+    }
 }
 
 impl fmt::Display for Error {
@@ -83,17 +89,17 @@ impl fmt::Display for Error {
 impl fmt::Debug for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let use_colors = stderr().is_terminal();
-        
+
         if use_colors {
             write!(f, "\r\x1B[K\x1b[91merror:\x1b[0m ")?;
         } else {
             write!(f, "error: ")?;
         }
-        
+
         if let Some(first) = self.chain.first() {
             write!(f, "{}", first)?;
         }
-        
+
         let mut causes = self.chain.iter().skip(1).peekable();
         if causes.peek().is_some() {
             writeln!(f)?;
@@ -102,7 +108,7 @@ impl fmt::Debug for Error {
                 writeln!(f, "    {}", cause)?;
             }
         }
-        
+
         if let Some(bt) = &self.backtrace {
             let bt_str = format!("{}", bt);
             if !bt_str.contains("disabled") && !bt_str.is_empty() {
@@ -110,26 +116,21 @@ impl fmt::Debug for Error {
                 writeln!(f, "{}", bt)?;
             }
         }
-        
+
         Ok(())
     }
 }
 
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.chain.get(1).map(|e| e.as_ref() as &dyn std::error::Error)
-    }
-}
-
-impl From<String> for Error {
-    fn from(error: String) -> Self {
-        Error::msg(error)
-    }
-}
-
-impl From<&str> for Error {
-    fn from(error: &str) -> Self {
-        Error::msg(error.to_string())
+// КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: impl std::error::Error for Error УБРАН.
+// Это разрывает конфликт: blanket impl<E: std::error::Error> From<E> for Error
+// больше не пересекается с core impl<T> From<T> for T,
+// потому что Error не удовлетворяет bound E: std::error::Error.
+impl<E> From<E> for Error
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    fn from(error: E) -> Self {
+        Error::new(error)
     }
 }
 

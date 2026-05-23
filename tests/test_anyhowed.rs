@@ -48,18 +48,6 @@ fn test_error_msg() {
 }
 
 #[test]
-fn test_from_string() {
-    let err: Error = "from str".to_string().into();
-    assert_eq!(err.to_string(), "from str");
-}
-
-#[test]
-fn test_from_str() {
-    let err: Error = "from str".into();
-    assert_eq!(err.to_string(), "from str");
-}
-
-#[test]
 fn test_context() {
     let base_err = Error::msg("base error");
     let err = base_err.context("additional context");
@@ -145,13 +133,6 @@ fn test_debug_does_not_panic() {
     assert!(debug_str.contains("ctx"));
     assert!(debug_str.contains("Caused by:"));
     assert!(debug_str.contains("debug test"));
-}
-
-#[test]
-fn test_error_trait_impl() {
-    let err = Error::msg("error trait");
-    assert!(StdError::source(&err).is_none());
-    assert_eq!(err.to_string(), "error trait");
 }
 
 #[test]
