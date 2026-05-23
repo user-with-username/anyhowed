@@ -1,6 +1,6 @@
 [package]
 name = "anyhowed"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 authors = ["user-with-username"]
 description = "Anyhow but with red 'error:' in terminal"

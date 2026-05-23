@@ -69,8 +69,6 @@ impl Error {
         self.downcast_ref::<T>().is_some()
     }
 
-    // source() как обычный метод — эквивалент std::error::Error::source,
-    // но без impl std::error::Error (он вызывал конфликт с blanket From).
     pub fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.chain.get(1).map(|e| e.as_ref() as &dyn std::error::Error)
     }
@@ -121,10 +119,10 @@ impl fmt::Debug for Error {
     }
 }
 
-// КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: impl std::error::Error for Error УБРАН.
-// Это разрывает конфликт: blanket impl<E: std::error::Error> From<E> for Error
-// больше не пересекается с core impl<T> From<T> for T,
-// потому что Error не удовлетворяет bound E: std::error::Error.
+// impl std::error::Error for Error НЕ реализован намеренно —
+// это единственный способ иметь blanket From<E: StdError> for Error
+// без конфликта с core impl<T> From<T> for T.
+
 impl<E> From<E> for Error
 where
     E: std::error::Error + Send + Sync + 'static,
@@ -173,6 +171,7 @@ pub trait Context<T, E> {
         F: FnOnce() -> C;
 }
 
+// Для Result<T, E> где E: StdError (стандартные ошибки — io::Error, FromUtf8Error и т.д.)
 impl<T, E> Context<T, E> for std::result::Result<T, E>
 where
     E: std::error::Error + Send + Sync + 'static,
@@ -193,6 +192,28 @@ where
     }
 }
 
+// Отдельный impl для Result<T, Error> — наш Error не реализует StdError,
+// поэтому предыдущий impl его не покрывает. Этот закрывает gap.
+// Два impl не конфликтуют: rustc выбирает по E = Error (конкретный тип) vs E: StdError.
+// Но E = Error не удовлетворяет E: StdError, значит перекрытия нет.
+impl<T> Context<T, Error> for std::result::Result<T, Error> {
+    fn context<C>(self, context: C) -> Result<T, Error>
+    where
+        C: fmt::Display + Send + Sync + 'static,
+    {
+        self.map_err(|e| e.context(context))
+    }
+
+    fn with_context<C, F>(self, context: F) -> Result<T, Error>
+    where
+        C: fmt::Display + Send + Sync + 'static,
+        F: FnOnce() -> C,
+    {
+        self.map_err(|e| e.context(context()))
+    }
+}
+
+// Option<T> — контекст через Error::msg
 impl<T> Context<T, std::convert::Infallible> for Option<T> {
     fn context<C>(self, context: C) -> Result<T, Error>
     where
