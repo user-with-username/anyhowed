@@ -44,6 +44,11 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Run tests
+        run: |
+          cargo test
+
+          
       - name: Bump patch version
         id: bump
         run: |
@@ -78,4 +83,4 @@ jobs:
 
       - name: Publish to crates.io
         run: |
-          cargo publish
+          cargo publish --allow-dirty
