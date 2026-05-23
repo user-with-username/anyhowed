@@ -2,6 +2,20 @@ use std::fmt;
 use std::io::{stderr, IsTerminal};
 use std::backtrace::Backtrace;
 
+struct ErrorAsStdError(Error);
+
+impl fmt::Debug for ErrorAsStdError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
+impl fmt::Display for ErrorAsStdError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+impl std::error::Error for ErrorAsStdError {}
+
 pub struct Error {
     chain: Vec<Box<dyn std::error::Error + Send + Sync + 'static>>,
     backtrace: Option<Backtrace>,
@@ -68,10 +82,6 @@ impl Error {
     pub fn is<T: std::error::Error + 'static>(&self) -> bool {
         self.downcast_ref::<T>().is_some()
     }
-
-    pub fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.chain.get(1).map(|e| e.as_ref() as &dyn std::error::Error)
-    }
 }
 
 impl fmt::Display for Error {
@@ -119,9 +129,17 @@ impl fmt::Debug for Error {
     }
 }
 
-// impl std::error::Error for Error НЕ реализован намеренно —
-// это единственный способ иметь blanket From<E: StdError> for Error
-// без конфликта с core impl<T> From<T> for T.
+impl From<Error> for Box<dyn std::error::Error> {
+    fn from(e: Error) -> Self {
+        Box::new(ErrorAsStdError(e))
+    }
+}
+
+impl From<Error> for Box<dyn std::error::Error + Send + Sync> {
+    fn from(e: Error) -> Self {
+        Box::new(ErrorAsStdError(e))
+    }
+}
 
 impl<E> From<E> for Error
 where
@@ -152,11 +170,7 @@ impl fmt::Display for ContextError {
     }
 }
 
-impl std::error::Error for ContextError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        None
-    }
-}
+impl std::error::Error for ContextError {}
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -171,7 +185,6 @@ pub trait Context<T, E> {
         F: FnOnce() -> C;
 }
 
-// Для Result<T, E> где E: StdError (стандартные ошибки — io::Error, FromUtf8Error и т.д.)
 impl<T, E> Context<T, E> for std::result::Result<T, E>
 where
     E: std::error::Error + Send + Sync + 'static,
@@ -192,10 +205,6 @@ where
     }
 }
 
-// Отдельный impl для Result<T, Error> — наш Error не реализует StdError,
-// поэтому предыдущий impl его не покрывает. Этот закрывает gap.
-// Два impl не конфликтуют: rustc выбирает по E = Error (конкретный тип) vs E: StdError.
-// Но E = Error не удовлетворяет E: StdError, значит перекрытия нет.
 impl<T> Context<T, Error> for std::result::Result<T, Error> {
     fn context<C>(self, context: C) -> Result<T, Error>
     where
@@ -213,7 +222,6 @@ impl<T> Context<T, Error> for std::result::Result<T, Error> {
     }
 }
 
-// Option<T> — контекст через Error::msg
 impl<T> Context<T, std::convert::Infallible> for Option<T> {
     fn context<C>(self, context: C) -> Result<T, Error>
     where
@@ -233,39 +241,34 @@ impl<T> Context<T, std::convert::Infallible> for Option<T> {
 
 #[macro_export]
 macro_rules! anyhow {
-    ($msg:literal $(,)?) => {
-        $crate::Error::msg($msg)
+    ($fmt:literal $(, $arg:expr)* $(,)?) => {
+        $crate::Error::msg(format!($fmt $(, $arg)*))
     };
     ($err:expr $(,)?) => {
         $crate::Error::new($err)
-    };
-    ($fmt:expr, $($arg:tt)*) => {
-        $crate::Error::msg(format!($fmt, $($arg)*))
     };
 }
 
 #[macro_export]
 macro_rules! bail {
-    ($msg:literal $(,)?) => {
-        return $crate::Result::Err($crate::anyhow!($msg))
+    ($fmt:literal $(, $arg:expr)* $(,)?) => {
+        return $crate::Result::Err($crate::Error::msg(format!($fmt $(, $arg)*)))
     };
     ($err:expr $(,)?) => {
-        return $crate::Result::Err($crate::anyhow!($err))
-    };
-    ($fmt:expr, $($arg:tt)*) => {
-        return $crate::Result::Err($crate::anyhow!($fmt, $($arg)*))
+        return $crate::Result::Err($crate::Error::new($err))
     };
 }
 
 #[macro_export]
 macro_rules! ensure {
-    ($cond:expr, $msg:literal $(,)?) => {
-        if !$cond { return $crate::Result::Err($crate::anyhow!($msg)); }
+    ($cond:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {
+        if !$cond {
+            return $crate::Result::Err($crate::Error::msg(format!($fmt $(, $arg)*)));
+        }
     };
     ($cond:expr, $err:expr $(,)?) => {
-        if !$cond { return $crate::Result::Err($crate::anyhow!($err)); }
-    };
-    ($cond:expr, $fmt:expr, $($arg:tt)*) => {
-        if !$cond { return $crate::Result::Err($crate::anyhow!($fmt, $($arg)*)); }
+        if !$cond {
+            return $crate::Result::Err($crate::Error::new($err));
+        }
     };
 }
